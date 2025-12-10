@@ -71,4 +71,3 @@ Logs are saved in `logs/` directory.
 ## Security
 
 ⚠️ **Important**: Never commit API keys to the repository. Always use environment variables.
-
