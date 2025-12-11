@@ -27,7 +27,7 @@ from utils import (
 )
 
 MAX_TOKENS_BUFFER = 100  # Buffer to leave some tokens for safety
-EMPTY_RESPONSE_RETRIES = 3  # Retry when model returns empty content
+EMPTY_RESPONSE_RETRIES = 0  # Retry when model returns empty content
 RATE_LIMIT_DELAY = 0.6  # Delay between retries
 
 def _estimate_messages_tokens(messages, model_id="gpt-4"):
@@ -279,21 +279,52 @@ def run_mode(
                 time.sleep(RATE_LIMIT_DELAY)
         
         if not full_response:
+            # Extract reasoning_text from resp_json if available
+            reasoning_text = None
+            predicted = None
+            correct = False
+            if resp_json:
+                _, _, reasoning_text, _, _ = _extract_text_and_tokens(resp_json)
+                if reasoning_text and reasoning_text.strip():
+                    predicted = extract_boxed_answer(reasoning_text) or [reasoning_text.strip()]
+                    correct = verify_answer(reasoning_text, answer_gold)
+            
+            # Save payload if resp_json exists
+            if resp_json:
+                payload_record = {
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "question": question,
+                    "id": id,
+                    "request": {
+                        "model": model_id,
+                        "messages": messages,
+                        "reasoning": reasoning_cfg,
+                        "include_reasoning": include_reasoning,
+                        "max_tokens": max_tokens,
+                        "prompt_tokens_estimated": prompt_tokens_estimated
+                    },
+                    "response": resp_json
+                }
+                _write_jsonl_line(payload_path, payload_record)
+            
             record = {
                 "question": question,
                 "full_response": None,
-                "predicted": None,
+                "predicted": predicted,
                 "answer_gold": answer_gold,
-                "correct": False,
+                "correct": correct,
                 "tokens": None,
                 "id": id,
                 "error": last_err if last_err else "unknown_error",
                 "category": sample.get("category", default_category),
                 "gold_cot": gold_cot,
                 "max_tokens": max_tokens,
-                "prompt_tokens": prompt_tokens_estimated
+                "prompt_tokens": prompt_tokens_estimated,
+                "reasoning": reasoning_text,
+                "response": resp_json
             }
             results.append(record)
+            _write_jsonl_line(main_jsonl_path, record)
             processed += 1
             if limit and processed >= limit:
                 break
