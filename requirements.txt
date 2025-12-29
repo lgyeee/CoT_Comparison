@@ -4,3 +4,4 @@ math_verify
 numpy
 tiktoken
 openrouter
+matplotlib

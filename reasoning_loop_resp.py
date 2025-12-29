@@ -80,7 +80,8 @@ def make_messages(mode, question, gold_cot=None):
     if mode == "general_cot":
         return [
             {"role": "user", "content": "Please think step by step.\n\n"
-             "After reasoning, you must output a clear explanation and put the final answer inside \\boxed{}.\n\n"
+             "After reasoning, output the final answer in the format: \\boxed{answer}."
+             "Make sure the boxed answer is the very last part of your response.\n\n"
              f"Question: {question}\n\n"}
         ]
     elif mode == "gold_cot":
@@ -199,6 +200,14 @@ def run_mode(
     if category is not None and "category" in ds.column_names:
         ds = ds.filter(lambda ex: ex.get("category", "") == category)
     
+    # 1.3.1 Filter MATH500 dataset by level 1-3 if dataset is MATH500
+    if dataset_key == "MATH500":
+        level_key = ds_cfg.get("level_key")
+        if level_key and level_key in ds.column_names:
+            ds = ds.filter(lambda ex: 1 <= ex.get(level_key, 0) <= 3)
+            logging.info(f"Filtering MATH500 dataset by level: 1 <= {level_key} <= 3")
+            logging.info(f"Filtered dataset size: {len(ds)}")
+    
     # 1.4 Get model configuration
     model_key, model_id = model, MODEL_MAP[model]
     
@@ -206,7 +215,8 @@ def run_mode(
     load_models_from_map()
     
     # 1.5 Setup output directories
-    out_dir = Path("outputs") / model_key
+    # Add dataset subdirectory: outputs/{model}/{dataset}/
+    out_dir = Path("outputs") / model_key / dataset_key
     out_dir.mkdir(parents=True, exist_ok=True)
     
     file_category = category if (category and "category" in ds.column_names) else "all"
@@ -219,6 +229,7 @@ def run_mode(
     answer_key = ds_cfg.get("answer_key", "answer")
     cot_key = ds_cfg.get("cot_key")
     id_key = ds_cfg.get("id_key", "id")
+    level_key = ds_cfg.get("level_key")  # Get level_key for MATH500
     default_category = None if "category" in ds.column_names else "all"
     
     results = []
@@ -323,6 +334,9 @@ def run_mode(
                 "reasoning": reasoning_text,
                 "response": resp_json
             }
+            # Add level field if level_key exists (e.g., for MATH500)
+            if level_key and level_key in sample:
+                record["level"] = sample.get(level_key)
             results.append(record)
             _write_jsonl_line(main_jsonl_path, record)
             processed += 1
@@ -334,47 +348,77 @@ def run_mode(
         # 3. Log File Recording Block
         # ========================================================================
         # 3.1 Save full payload (request + response) to payload file
-        payload_record = {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "question": question,
-            "id": id,
-            "request": {
-                "model": model_id,
-                "messages": messages,
-                "reasoning": reasoning_cfg,
-                "include_reasoning": include_reasoning,
-                "max_tokens": max_tokens,
-                "prompt_tokens_estimated": prompt_tokens_estimated
-            },
-            "response": resp_json
-        }
-        _write_jsonl_line(payload_path, payload_record)
+        try:
+            payload_record = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "question": question,
+                "id": id,
+                "request": {
+                    "model": model_id,
+                    "messages": messages,
+                    "reasoning": reasoning_cfg,
+                    "include_reasoning": include_reasoning,
+                    "max_tokens": max_tokens,
+                    "prompt_tokens_estimated": prompt_tokens_estimated
+                },
+                "response": resp_json
+            }
+            _write_jsonl_line(payload_path, payload_record)
+        except Exception as e:
+            logging.error(f"Error saving payload for sample {id}: {e}")
         
         # ========================================================================
         # 4. Result Recording Block
         # ========================================================================
-        # 4.1 Extract text and tokens from response
-        full_response, response_tokens, reasoning_text, _, prompt_tokens = _extract_text_and_tokens(resp_json)
-        predicted = extract_boxed_answer(full_response) or [full_response.strip()]
-        correct = verify_answer(full_response, answer_gold)
-        
-        # 4.2 Create result record
-        record = {
-            "id": id,
-            "question": question,
-            "full_response": full_response,
-            "predicted": predicted,
-            "answer_gold": answer_gold,
-            "correct": correct,
-            "response_tokens": response_tokens,
-            "reasoning": reasoning_text,
-            "category": sample.get("category", default_category),
-            "prompt_tokens": prompt_tokens,
-            "max_tokens": max_tokens,
-            "gold_cot": gold_cot if mode == "gold_cot" else None
-        }
-        results.append(record)
-        _write_jsonl_line(main_jsonl_path, record)
+        try:
+            # 4.1 Extract text and tokens from response
+            full_response, response_tokens, reasoning_text, _, prompt_tokens = _extract_text_and_tokens(resp_json)
+            predicted = extract_boxed_answer(full_response) or [full_response.strip()]
+            correct = verify_answer(full_response, answer_gold)
+            
+            # 4.2 Create result record
+            record = {
+                "id": id,
+                "question": question,
+                "full_response": full_response,
+                "predicted": predicted,
+                "answer_gold": answer_gold,
+                "correct": correct,
+                "response_tokens": response_tokens,
+                "reasoning": reasoning_text,
+                "category": sample.get("category", default_category),
+                "prompt_tokens": prompt_tokens,
+                "max_tokens": max_tokens,
+                "gold_cot": gold_cot if mode == "gold_cot" else None
+            }
+            # Add level field if level_key exists (e.g., for MATH500)
+            if level_key and level_key in sample:
+                record["level"] = sample.get(level_key)
+            results.append(record)
+            _write_jsonl_line(main_jsonl_path, record)
+        except Exception as e:
+            logging.error(f"Error processing sample {id}: {e}")
+            # Create error record
+            record = {
+                "id": id,
+                "question": question,
+                "full_response": None,
+                "predicted": None,
+                "answer_gold": answer_gold,
+                "correct": False,
+                "response_tokens": None,
+                "reasoning": None,
+                "category": sample.get("category", default_category),
+                "prompt_tokens": None,
+                "max_tokens": max_tokens,
+                "gold_cot": gold_cot if mode == "gold_cot" else None,
+                "error": str(e)
+            }
+            # Add level field if level_key exists (e.g., for MATH500)
+            if level_key and level_key in sample:
+                record["level"] = sample.get(level_key)
+            results.append(record)
+            _write_jsonl_line(main_jsonl_path, record)
         
         processed += 1
         if limit and processed >= limit:
@@ -407,7 +451,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", choices=list(MODEL_MAP.keys()), required=True)
     parser.add_argument("--reasoning_effort", type=str, required=True)
     parser.add_argument("--include_reasoning", action="store_true")
-    parser.add_argument("--limit", type=int, default=1, 
+    parser.add_argument("--limit", type=int, default=None, 
                         help="Process at most N samples (default=1)")
     args = parser.parse_args()
     

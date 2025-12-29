@@ -11,9 +11,14 @@ if [ -z "$OPENROUTER_KEY" ] && [ -z "$OPENROUTER_API_KEY" ]; then
 fi
 
 MODE="general_cot"      # Fixed mode: general_cot
-MODELS=()
-#  MODEL env var is set, use its value (can be single model or multiple, space-separated)
-read -ra MODELS <<< "$MODEL"
+DATASET="MATH500"       # Dataset: MATH500 (will auto-filter level 1-3)
+
+# 如果设置了 MODEL 环境变量，使用它；否则使用默认的 qwen3-8b 和 qwen3-32b
+if [ -n "$MODEL" ]; then
+    read -ra MODELS <<< "$MODEL"
+else
+    MODELS=("qwen3-8b" "qwen3-32b")
+fi
 
 # ============================================================================
 # Run experiments
@@ -25,14 +30,14 @@ for model in "${MODELS[@]}"; do
   else
     reasoning_effort="high"
   fi
+  LOG_FILE="logs/${model//\//_}_${DATASET}_${MODE}_$(date +%Y%m%d-%H%M%S).log"
   python reasoning_loop_resp.py \
     --model "$model" \
     --mode "$MODE" \
-    --dataset AIME2025 \
+    --dataset "$DATASET" \
     --reasoning_effort "$reasoning_effort" \
     --include_reasoning \
-    --limit 30 \
-    2>&1 | tee -a "logs/${model//\//_}_${MODE}_$(date +%Y%m%d-%H%M%S).log"
+    2>&1 | tee -a "$LOG_FILE"
 done
 
 echo "All experiments done!"

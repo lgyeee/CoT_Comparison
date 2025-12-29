@@ -60,6 +60,14 @@ DATASET_MAP = {
         "id_key": "id",
         "question_key": "problem",
         "answer_key": "answer"
+    },
+    "MATH500": {
+        "args": ("HuggingFaceH4/MATH-500", "test"),
+        "id_key": "unique_id",
+        "question_key": "problem",
+        "answer_key": "answer",
+        "category_key": "subject",
+        "level_key": "level"
     }
 }
 
